@@ -8,7 +8,7 @@ import torch
 
 from functools import partial
 
-from modeling import ImageEncoderViT, MaskDecoder, PromptEncoder, Sam, TwoWayTransformer, TinyViT
+from .modeling import ImageEncoderViT, MaskDecoder, PromptEncoder, Sam, TwoWayTransformer, TinyViT
 
 
 def build_sam_vit_h(checkpoint=None, custom_img_size=1024):
