@@ -13,18 +13,27 @@ from typing import Any, Dict, List, Tuple
 from .image_encoder import ImageEncoderViT
 from .mask_decoder import MaskDecoder
 from .prompt_encoder import PromptEncoder
-
+import subprocess
 
 # by LBK EDIT
 from torchvision.ops.boxes import batched_nms
-from utils.amg import (
+from ..utils.amg import (
     MaskData,
     batched_mask_to_box,
     calculate_stability_score,
     is_box_near_crop_edge,
     uncrop_masks,
 )
-
+def nvidia_smi():
+      # Command to get the used GPU memory
+      cmd = ['nvidia-smi']
+      # Execute the command
+      result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+      # Check for errors
+      if result.stderr:
+          print("Error:", result.stderr)
+          return None
+      return result.stdout.strip()
 
 class Sam(nn.Module):
     mask_threshold: float = 0.0
@@ -140,7 +149,7 @@ class Sam(nn.Module):
                 }
             )
         return outputs
-    
+
 
     # Batch Individual Mask Generation by LBK
     @torch.no_grad()
@@ -150,9 +159,12 @@ class Sam(nn.Module):
         multimask_output: bool,
         is_low_resol: bool = False,
     ) -> List[Dict[str, torch.Tensor]]:
-        
+
+        print("before stack", nvidia_smi())
         input_images = torch.stack([self.lbk_preprocess(x["image"]) for x in batched_input], dim=0)
+        print("before embedding", nvidia_smi())
         image_embeddings = self.image_encoder(input_images)
+        print("after embedding", nvidia_smi())
 
         refined_mask_outputs = []
         for image_record, curr_embedding in zip(batched_input, image_embeddings):
@@ -160,11 +172,13 @@ class Sam(nn.Module):
               points = (image_record["point_coords"], image_record["point_labels"])
           else:
               points = None
+          print("before encoder", nvidia_smi())
           sparse_embeddings, dense_embeddings = self.prompt_encoder(
               points=points,
               boxes=image_record.get("boxes", None),
               masks=image_record.get("mask_inputs", None),
           )
+          print("before decoder", nvidia_smi())
           low_res_masks, iou_predictions = self.mask_decoder(
               image_embeddings=curr_embedding.unsqueeze(0),
               image_pe=self.prompt_encoder.get_dense_pe(),
@@ -174,6 +188,7 @@ class Sam(nn.Module):
           )
 
           # Progressing Intergraion.. by LBK
+          print("after decoder", nvidia_smi())
           refined_masks = self.postprocess_small_regions(low_res_masks, iou_predictions, *input_images.shape[2:], is_low_resol)
           if not is_low_resol:
             refined_masks = F.interpolate(
@@ -183,9 +198,9 @@ class Sam(nn.Module):
               align_corners=False,
             ).squeeze(1).bool()
           refined_mask_outputs.append(refined_masks)
-          
+
         return refined_mask_outputs
-    
+
     # PostProcess by LBK EDIT
     def postprocess_small_regions(self, masks, iou_predictions, orig_h, orig_w, is_low_resol):
 
@@ -218,7 +233,7 @@ class Sam(nn.Module):
       # Serialize predictions and store in MaskData
       data = MaskData(
           masks=masks.flatten(0, 1),
-          iou_preds=iou_predictions.flatten(0, 1),          
+          iou_preds=iou_predictions.flatten(0, 1),
       )
 
       # Filter by predicted IoU
@@ -299,7 +314,7 @@ class Sam(nn.Module):
         padw = self.image_encoder.img_size - w
         x = F.pad(x, (0, padw, 0, padh))
         return x
-    
+
     # by lbk edit
     def lbk_preprocess(self, x: torch.Tensor) -> torch.Tensor:
       """Normalize pixel values and pad to a square input."""
